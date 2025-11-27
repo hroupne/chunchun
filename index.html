@@ -38,6 +38,7 @@
       display: none;
     }
 
+    /* UI 提示层 */
     #ui-layer {
       position: absolute;
       bottom: 40px;
@@ -75,6 +76,46 @@
       opacity: 0;
       pointer-events: none;
     }
+
+    /* --- 音乐按钮样式 --- */
+    #music-btn {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 154, 158, 0.5);
+      border-radius: 50%;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ff9a9e;
+      font-size: 20px;
+      cursor: pointer;
+      backdrop-filter: blur(2px);
+      box-shadow: 0 0 10px rgba(255, 154, 158, 0.3);
+      animation: spin 4s linear infinite;
+      animation-play-state: paused;
+      /* 默认暂停动画 */
+    }
+
+    #music-btn.playing {
+      animation-play-state: running;
+      /* 播放时旋转 */
+      background: rgba(255, 154, 158, 0.2);
+    }
+
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
+    }
   </style>
 </head>
 
@@ -84,11 +125,21 @@
     <div>正在唤醒暴风雪...</div>
     <div style="font-size:12px; opacity:0.7; margin-top:5px;">(请求开启摄像头以体验手势交互)</div>
   </div>
+
   <video id="input_video"></video>
 
   <div id="ui-layer">
     <div class="hint-box" id="hint-text">正在启动...</div>
   </div>
+
+  <!-- 音乐按钮 -->
+  <div id="music-btn">♫</div>
+
+  <!-- 音乐标签：请在 src 中填入你的 mp3 链接 -->
+  <audio id="bgm" loop>
+    <!-- 示例地址，请替换为你自己的 -->
+    <source src="https://music.163.com/song/media/outer/url?id=1498342485.mp3" type="audio/mpeg">
+  </audio>
 
   <canvas id="canvas"></canvas>
 
@@ -98,18 +149,23 @@
     const hintText = document.getElementById('hint-text');
     const loadingDiv = document.getElementById('loading');
 
+    // 音乐控制
+    const musicBtn = document.getElementById('music-btn');
+    const audio = document.getElementById('bgm');
+    let isMusicPlaying = false;
+
     // --- 核心配置 ---
     let width, height;
     let isMobile = false;
     let focalLength = 700;
 
-    // 粒子池 (实际渲染数量在 resize 中动态定义)
+    // 粒子池
     let particles = [];
     let bgParticles = [];
 
-    // 当前激活的粒子数量 (安全阈值)
-    let activeParticleCount = 0; // 主体画面粒子数
-    let activeBgCount = 0;       // 背景雪花数
+    // 当前激活的粒子数量
+    let activeParticleCount = 0;
+    let activeBgCount = 0;
 
     const colors = {
       main: ['#ffffff', '#ffebf0', '#ffc2d1', '#ff9a9e', '#ffb7b2'],
@@ -129,17 +185,19 @@
       // 监听窗口调整
       window.addEventListener('resize', () => {
         resize();
-        // 延迟重绘，防止切换过快闪烁
         setTimeout(() => loadScene(currentScene), 200);
       });
 
-      // 1. 初始化粒子池 (按电脑端最大需求创建，避免中途 new 对象造成卡顿)
-      // 主体池：6000个足够高清
+      // 初始化音乐交互
+      initMusic();
+
+      // 初始化粒子池
+      // 主体池：6000个足够电脑高清
       for (let i = 0; i < 6000; i++) {
         particles.push(new Particle(true));
       }
-      // 背景池：3000个足够暴风雪
-      for (let i = 0; i < 35000; i++) {
+      // 背景池：15000个足够电脑暴风雪
+      for (let i = 0; i < 15000; i++) {
         bgParticles.push(new Particle(false));
       }
 
@@ -148,7 +206,36 @@
       startCamera();
     }
 
-    // --- 关键：安全数值控制 ---
+    // --- 音乐控制逻辑 ---
+    function initMusic() {
+      musicBtn.addEventListener('click', toggleMusic);
+
+      // 尝试在第一次点击屏幕时自动播放（解决浏览器自动播放限制）
+      const autoPlayHandler = () => {
+        if (!isMusicPlaying) {
+          toggleMusic();
+          // 移除监听，避免后续点击重复触发
+          document.removeEventListener('click', autoPlayHandler);
+          document.removeEventListener('touchstart', autoPlayHandler);
+        }
+      };
+      document.addEventListener('click', autoPlayHandler);
+      document.addEventListener('touchstart', autoPlayHandler);
+    }
+
+    function toggleMusic() {
+      if (isMusicPlaying) {
+        audio.pause();
+        musicBtn.classList.remove('playing');
+      } else {
+        audio.play().then(() => {
+          musicBtn.classList.add('playing');
+        }).catch(e => console.log("播放失败，需用户交互", e));
+      }
+      isMusicPlaying = !isMusicPlaying;
+    }
+
+    // --- 安全数值控制 & 移动端优化 ---
     function resize() {
       width = window.innerWidth;
       height = window.innerHeight;
@@ -158,15 +245,15 @@
       isMobile = width < 768;
 
       if (isMobile) {
-        // 【手机端安全配置】
-        // 手机 Canvas 性能有限，总粒子数控制在 3500 以内最稳
-        activeParticleCount = 2200; // 保证图形清晰
-        activeBgCount = 1000;       // 1000片雪花在手机屏上已经很密了
+        // 【手机端配置 - 优化文字清晰度】
+        // 1. 粒子数量增加：从 2200 提升到 3500，为了更好的填充文字
+        activeParticleCount = 3500;
+        activeBgCount = 1000;
         focalLength = 500;
       } else {
-        // 【电脑端高清配置】
-        activeParticleCount = 5500; // 极高清晰度
-        activeBgCount = 15000;       // 漫天大雪
+        // 【电脑端配置】
+        activeParticleCount = 5500;
+        activeBgCount = 10000;
         focalLength = 800;
       }
     }
@@ -177,7 +264,16 @@
         this.isMain = isMain;
         this.reset();
         this.color = '#FFF6F6';
-        this.size = isMain ? Math.random() * 2 + 0.5 : Math.random() * 1.5;
+
+        // 【关键修改：尺寸优化】
+        // 手机上：粒子更小 (0.4 - 1.6)，防止糊成一团
+        // 电脑上：粒子稍大 (0.5 - 2.5)
+        if (isMain) {
+          this.size = isMobile ? Math.random() * 1.2 + 0.4 : Math.random() * 2 + 0.5;
+        } else {
+          this.size = isMobile ? Math.random() * 1.0 : Math.random() * 1.5;
+        }
+
         this.ease = 0.04 + Math.random() * 0.05;
         this.alpha = Math.random();
         this.fadeSpeed = 0.01 + Math.random() * 0.02;
@@ -195,54 +291,43 @@
         this.ex = 0; this.ey = 0; this.ez = 0;
       }
 
-      // 初始化暴风雪参数
       initSnow() {
-        // 随机分布在屏幕内外
         this.x = (Math.random() - 0.5) * width * 1.5;
         this.y = (Math.random() - 0.5) * height * 1.5;
         this.z = (Math.random() - 0.5) * 1500;
 
-        // 暴风雪速度：下落快，且有横向风
-        this.fallSpeed = 2 + Math.random() * 3; // 下落速度 (2-5)
-        this.windSpeed = 1 + Math.random() * 1.5; // 向右吹的风 (1-2.5)
-
-        this.color = '#e0f7fa'; // 微微偏蓝的雪白色
+        this.fallSpeed = 2 + Math.random() * 3;
+        this.windSpeed = 1 + Math.random() * 1.5;
+        this.color = '#e0f7fa';
       }
 
       update() {
         let targetX, targetY, targetZ;
 
         if (this.isMain) {
-          // --- 主体逻辑 ---
           if (isExploded) {
             targetX = this.ex; targetY = this.ey; targetZ = this.ez;
           } else {
             targetX = this.tx; targetY = this.ty; targetZ = this.tz;
           }
-          // 平滑运动
           this.x += (targetX - this.x) * this.ease;
           this.y += (targetY - this.y) * this.ease;
           this.z += (targetZ - this.z) * this.ease;
 
         } else {
-          // --- 暴风雪逻辑 ---
-          this.y += this.fallSpeed; // 垂直下落
-          this.x += this.windSpeed; // 水平风吹
+          this.y += this.fallSpeed;
+          this.x += this.windSpeed;
 
-          // 边界循环：如果掉出屏幕底部，或者飘出屏幕右侧，重置到顶部或左侧
           if (this.y > height / 2 + 100) {
             this.y = -height / 2 - 100;
-            this.x = (Math.random() - 0.5) * width * 1.5; // 随机X
+            this.x = (Math.random() - 0.5) * width * 1.5;
           }
           if (this.x > width / 2 + 100) {
             this.x = -width / 2 - 100;
             this.y = (Math.random() - 0.5) * height * 1.5;
           }
-
-          // 雪花不需要 Lerp 缓动，直接改变坐标
         }
 
-        // 闪烁/透明度变化
         this.alpha += this.fadeSpeed;
         if (this.alpha > 1 || this.alpha < 0.2) this.fadeSpeed = -this.fadeSpeed;
       }
@@ -251,13 +336,11 @@
         let rx = this.x, ry = this.y, rz = this.z;
 
         if (this.isMain) {
-          // 只有主体参与旋转
           const cos = Math.cos(rotationY);
           const sin = Math.sin(rotationY);
           rx = this.x * cos - this.z * sin;
           rz = this.z * cos + this.x * sin;
         }
-        // 雪花不参与整体旋转，保持背景固定，避免眩晕感
 
         const scale = focalLength / (focalLength + rz);
         const x2d = width / 2 + rx * scale;
@@ -281,20 +364,20 @@
       }
     }
 
-    // --- 渲染循环 (只渲染 active 数量) ---
+    // --- 渲染循环 ---
     function loop() {
       ctx.clearRect(0, 0, width, height);
       ctx.globalCompositeOperation = 'lighter';
 
       rotationY += 0.003;
 
-      // 1. 渲染暴风雪 (只循环 activeBgCount 次)
+      // 渲染暴风雪
       for (let i = 0; i < activeBgCount; i++) {
         bgParticles[i].update();
         bgParticles[i].draw();
       }
 
-      // 2. 渲染主体 (只循环 activeParticleCount 次)
+      // 渲染主体
       for (let i = 0; i < particles.length; i++) {
         if (particles[i].isMain && i < activeParticleCount) {
           particles[i].update();
@@ -313,7 +396,6 @@
       const h = minDim * 0.8;
       const maxR = minDim * 0.35;
 
-      // 主体
       const spiralCount = activeParticleCount * 0.75;
       for (let i = 0; i < spiralCount; i++) {
         const p = i / spiralCount;
@@ -330,7 +412,6 @@
         });
       }
 
-      // 爱心
       const heartCount = activeParticleCount * 0.1;
       const topY = -h / 2;
       for (let i = 0; i < heartCount; i++) {
@@ -347,7 +428,6 @@
         });
       }
 
-      // 光环
       const ringCount = activeParticleCount * 0.15;
       for (let i = 0; i < ringCount; i++) {
         const angle = Math.random() * Math.PI * 2;
@@ -368,6 +448,7 @@
       offCanvas.width = width;
       offCanvas.height = height;
 
+      // 字体大小自适应
       let baseSize = width / 5;
       if (text.length > 4) baseSize = width / (text.length + 1);
       const fontSize = Math.min(baseSize, 180);
@@ -380,7 +461,11 @@
 
       const data = offCtx.getImageData(0, 0, width, height).data;
       const coords = [];
-      const gap = isMobile ? 4 : 5;
+
+      // 【关键修改：采样率优化】
+      // 手机端 gap=2 (每隔2个像素采一次)，电脑端 gap=5
+      // 间隙越小，采样的点越多，文字越精细
+      const gap = isMobile ? 2 : 5;
 
       for (let y = 0; y < height; y += gap) {
         for (let x = 0; x < width; x += gap) {
@@ -389,7 +474,7 @@
             coords.push({
               x: (x - width / 2) * 1.2,
               y: (y - height / 2) * 1.2,
-              z: (Math.random() - 0.5) * 40,
+              z: (Math.random() - 0.5) * 40, // 稍微压缩z轴，让文字更扁平清晰
               color: colors.main[colorIndex]
             });
           }
@@ -410,11 +495,12 @@
       if (targets.length < minNeeded) {
         const len = targets.length;
         if (len > 0) {
+          // 如果点不够，复制现有的点并加微小偏移，增加密度
           for (let i = len; i < minNeeded; i++) {
             const base = targets[i % len];
             targets.push({
-              x: base.x + (Math.random() - 0.5) * 5,
-              y: base.y + (Math.random() - 0.5) * 5,
+              x: base.x + (Math.random() - 0.5) * 3, // 偏移量改小，让结构更紧凑
+              y: base.y + (Math.random() - 0.5) * 3,
               z: base.z,
               color: base.color
             });
@@ -434,6 +520,10 @@
           p.color = targets[i].color;
           p.isMain = true;
           p.ease = Math.min(0.08, p.ease + 0.02);
+
+          // 重新根据设备调整大小（确保切换场景时应用新尺寸逻辑）
+          p.size = isMobile ? Math.random() * 1.2 + 0.4 : Math.random() * 2 + 0.5;
+
         } else {
           p.isMain = false;
           p.tx = (Math.random() - 0.5) * width * 2;
