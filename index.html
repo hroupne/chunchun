@@ -369,7 +369,14 @@
       ctx.clearRect(0, 0, width, height);
       ctx.globalCompositeOperation = 'lighter';
 
-      rotationY += 0.003;
+      // 根据场景调整旋转方向
+      if (currentScene === 0) {
+        // 圣诞树：正常旋转
+        rotationY += 0.003;
+      } else {
+        // 文字场景（爱心、圣诞快乐）：反向旋转
+        rotationY -= 0.003;
+      }
 
       // 渲染暴风雪
       for (let i = 0; i < activeBgCount; i++) {
