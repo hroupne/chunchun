@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>To 春春 - 圣诞快乐</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background-color: #050505;
+      overflow: hidden;
+      font-family: "Microsoft YaHei", sans-serif;
+      touch-action: none;
+    }
+
+    #canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+
+    #input_video {
+      display: none;
+    }
+
+    #ui-layer {
+      position: absolute;
+      bottom: 40px;
+      width: 100%;
+      text-align: center;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .hint-box {
+      display: inline-block;
+      background: rgba(30, 30, 30, 0.6);
+      backdrop-filter: blur(4px);
+      padding: 12px 24px;
+      border-radius: 30px;
+      border: 1px solid rgba(255, 154, 158, 0.3);
+      color: rgba(255, 200, 210, 0.9);
+      font-size: 14px;
+      box-shadow: 0 0 15px rgba(255, 154, 158, 0.2);
+    }
+
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ff9a9e;
+      text-align: center;
+      font-size: 14px;
+      z-index: 20;
+      transition: opacity 0.5s;
+    }
+
+    .hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="loading" class="loading">
+    <div>正在唤醒暴风雪...</div>
+    <div style="font-size:12px; opacity:0.7; margin-top:5px;">(请求开启摄像头以体验手势交互)</div>
+  </div>
+  <video id="input_video"></video>
+
+  <div id="ui-layer">
+    <div class="hint-box" id="hint-text">正在启动...</div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const hintText = document.getElementById('hint-text');
+    const loadingDiv = document.getElementById('loading');
+
+    // --- 核心配置 ---
+    let width, height;
+    let isMobile = false;
+    let focalLength = 700;
+
+    // 粒子池 (实际渲染数量在 resize 中动态定义)
+    let particles = [];
+    let bgParticles = [];
+
+    // 当前激活的粒子数量 (安全阈值)
+    let activeParticleCount = 0; // 主体画面粒子数
+    let activeBgCount = 0;       // 背景雪花数
+
+    const colors = {
+      main: ['#ffffff', '#ffebf0', '#ffc2d1', '#ff9a9e', '#ffb7b2'],
+      heart: '#ff2244',
+      ring: '#ffcce6'
+    };
+
+    let currentScene = 0;
+    const scenes = ['tree', 'love', 'name'];
+    let isExploded = false;
+    let rotationY = 0;
+    let cameraActive = false;
+
+    // --- 初始化 ---
+    function init() {
+      resize();
+      // 监听窗口调整
+      window.addEventListener('resize', () => {
+        resize();
+        // 延迟重绘，防止切换过快闪烁
+        setTimeout(() => loadScene(currentScene), 200);
+      });
+
+      // 1. 初始化粒子池 (按电脑端最大需求创建，避免中途 new 对象造成卡顿)
+      // 主体池：6000个足够高清
+      for (let i = 0; i < 6000; i++) {
+        particles.push(new Particle(true));
+      }
+      // 背景池：3000个足够暴风雪
+      for (let i = 0; i < 35000; i++) {
+        bgParticles.push(new Particle(false));
+      }
+
+      loadScene(0);
+      loop();
+      startCamera();
+    }
+
+    // --- 关键：安全数值控制 ---
+    function resize() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
+
+      isMobile = width < 768;
+
+      if (isMobile) {
+        // 【手机端安全配置】
+        // 手机 Canvas 性能有限，总粒子数控制在 3500 以内最稳
+        activeParticleCount = 2200; // 保证图形清晰
+        activeBgCount = 1000;       // 1000片雪花在手机屏上已经很密了
+        focalLength = 500;
+      } else {
+        // 【电脑端高清配置】
+        activeParticleCount = 5500; // 极高清晰度
+        activeBgCount = 15000;       // 漫天大雪
+        focalLength = 800;
+      }
+    }
+
+    // --- 粒子类 ---
+    class Particle {
+      constructor(isMain) {
+        this.isMain = isMain;
+        this.reset();
+        this.color = '#FFF6F6';
+        this.size = isMain ? Math.random() * 2 + 0.5 : Math.random() * 1.5;
+        this.ease = 0.04 + Math.random() * 0.05;
+        this.alpha = Math.random();
+        this.fadeSpeed = 0.01 + Math.random() * 0.02;
+
+        if (!isMain) {
+          this.initSnow();
+        }
+      }
+
+      reset() {
+        this.x = (Math.random() - 0.5) * width;
+        this.y = (Math.random() - 0.5) * height;
+        this.z = (Math.random() - 0.5) * 1000;
+        this.tx = 0; this.ty = 0; this.tz = 0;
+        this.ex = 0; this.ey = 0; this.ez = 0;
+      }
+
+      // 初始化暴风雪参数
+      initSnow() {
+        // 随机分布在屏幕内外
+        this.x = (Math.random() - 0.5) * width * 1.5;
+        this.y = (Math.random() - 0.5) * height * 1.5;
+        this.z = (Math.random() - 0.5) * 1500;
+
+        // 暴风雪速度：下落快，且有横向风
+        this.fallSpeed = 2 + Math.random() * 3; // 下落速度 (2-5)
+        this.windSpeed = 1 + Math.random() * 1.5; // 向右吹的风 (1-2.5)
+
+        this.color = '#e0f7fa'; // 微微偏蓝的雪白色
+      }
+
+      update() {
+        let targetX, targetY, targetZ;
+
+        if (this.isMain) {
+          // --- 主体逻辑 ---
+          if (isExploded) {
+            targetX = this.ex; targetY = this.ey; targetZ = this.ez;
+          } else {
+            targetX = this.tx; targetY = this.ty; targetZ = this.tz;
+          }
+          // 平滑运动
+          this.x += (targetX - this.x) * this.ease;
+          this.y += (targetY - this.y) * this.ease;
+          this.z += (targetZ - this.z) * this.ease;
+
+        } else {
+          // --- 暴风雪逻辑 ---
+          this.y += this.fallSpeed; // 垂直下落
+          this.x += this.windSpeed; // 水平风吹
+
+          // 边界循环：如果掉出屏幕底部，或者飘出屏幕右侧，重置到顶部或左侧
+          if (this.y > height / 2 + 100) {
+            this.y = -height / 2 - 100;
+            this.x = (Math.random() - 0.5) * width * 1.5; // 随机X
+          }
+          if (this.x > width / 2 + 100) {
+            this.x = -width / 2 - 100;
+            this.y = (Math.random() - 0.5) * height * 1.5;
+          }
+
+          // 雪花不需要 Lerp 缓动，直接改变坐标
+        }
+
+        // 闪烁/透明度变化
+        this.alpha += this.fadeSpeed;
+        if (this.alpha > 1 || this.alpha < 0.2) this.fadeSpeed = -this.fadeSpeed;
+      }
+
+      draw() {
+        let rx = this.x, ry = this.y, rz = this.z;
+
+        if (this.isMain) {
+          // 只有主体参与旋转
+          const cos = Math.cos(rotationY);
+          const sin = Math.sin(rotationY);
+          rx = this.x * cos - this.z * sin;
+          rz = this.z * cos + this.x * sin;
+        }
+        // 雪花不参与整体旋转，保持背景固定，避免眩晕感
+
+        const scale = focalLength / (focalLength + rz);
+        const x2d = width / 2 + rx * scale;
+        const y2d = height / 2 + ry * scale;
+        const s2d = this.size * scale;
+
+        if (rz > -focalLength && scale > 0) {
+          ctx.fillStyle = this.color;
+          ctx.globalAlpha = Math.max(0, Math.min(1, this.alpha));
+          ctx.beginPath();
+          ctx.arc(x2d, y2d, s2d, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      explode() {
+        const range = isMobile ? 800 : 1500;
+        this.ex = (Math.random() - 0.5) * range;
+        this.ey = (Math.random() - 0.5) * range;
+        this.ez = (Math.random() - 0.5) * range;
+      }
+    }
+
+    // --- 渲染循环 (只渲染 active 数量) ---
+    function loop() {
+      ctx.clearRect(0, 0, width, height);
+      ctx.globalCompositeOperation = 'lighter';
+
+      rotationY += 0.003;
+
+      // 1. 渲染暴风雪 (只循环 activeBgCount 次)
+      for (let i = 0; i < activeBgCount; i++) {
+        bgParticles[i].update();
+        bgParticles[i].draw();
+      }
+
+      // 2. 渲染主体 (只循环 activeParticleCount 次)
+      for (let i = 0; i < particles.length; i++) {
+        if (particles[i].isMain && i < activeParticleCount) {
+          particles[i].update();
+          particles[i].draw();
+        }
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    // --- 图形生成算法 ---
+
+    function getTreeCoords() {
+      const coords = [];
+      const minDim = Math.min(width, height);
+      const h = minDim * 0.8;
+      const maxR = minDim * 0.35;
+
+      // 主体
+      const spiralCount = activeParticleCount * 0.75;
+      for (let i = 0; i < spiralCount; i++) {
+        const p = i / spiralCount;
+        const y = (p - 0.5) * h;
+        const r = p * maxR;
+        const angle = p * Math.PI * 25;
+        const finalR = r * (0.4 + 0.6 * Math.random());
+
+        coords.push({
+          x: Math.cos(angle) * finalR,
+          y: y + h * 0.1,
+          z: Math.sin(angle) * finalR,
+          color: colors.main[Math.floor(Math.random() * colors.main.length)]
+        });
+      }
+
+      // 爱心
+      const heartCount = activeParticleCount * 0.1;
+      const topY = -h / 2;
+      for (let i = 0; i < heartCount; i++) {
+        const t = Math.random() * Math.PI * 2;
+        const hk = isMobile ? 0.3 : 0.5;
+        const hx = 16 * Math.pow(Math.sin(t), 3);
+        const hy = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+
+        coords.push({
+          x: hx * hk * 1.5,
+          y: topY + hy * hk * 1.5 + h * 0.1 - 20,
+          z: (Math.random() - 0.5) * 10,
+          color: colors.heart
+        });
+      }
+
+      // 光环
+      const ringCount = activeParticleCount * 0.15;
+      for (let i = 0; i < ringCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const r = maxR * (0.8 + Math.random() * 0.5);
+        coords.push({
+          x: Math.cos(angle) * r,
+          y: h / 2 + h * 0.1,
+          z: Math.sin(angle) * r,
+          color: colors.ring
+        });
+      }
+      return coords;
+    }
+
+    function getTextCoords(text) {
+      const offCanvas = document.createElement('canvas');
+      const offCtx = offCanvas.getContext('2d');
+      offCanvas.width = width;
+      offCanvas.height = height;
+
+      let baseSize = width / 5;
+      if (text.length > 4) baseSize = width / (text.length + 1);
+      const fontSize = Math.min(baseSize, 180);
+
+      offCtx.font = `bold ${fontSize}px "Microsoft YaHei", Arial`;
+      offCtx.fillStyle = '#fff';
+      offCtx.textAlign = 'center';
+      offCtx.textBaseline = 'middle';
+      offCtx.fillText(text, width / 2, height / 2);
+
+      const data = offCtx.getImageData(0, 0, width, height).data;
+      const coords = [];
+      const gap = isMobile ? 4 : 5;
+
+      for (let y = 0; y < height; y += gap) {
+        for (let x = 0; x < width; x += gap) {
+          if (data[(y * width + x) * 4 + 3] > 128) {
+            const colorIndex = Math.floor(Math.random() * colors.main.length);
+            coords.push({
+              x: (x - width / 2) * 1.2,
+              y: (y - height / 2) * 1.2,
+              z: (Math.random() - 0.5) * 40,
+              color: colors.main[colorIndex]
+            });
+          }
+        }
+      }
+      return coords;
+    }
+
+    function loadScene(index) {
+      let targets = [];
+      const s = scenes[index];
+      if (s === 'tree') targets = getTreeCoords();
+      else if (s === 'love') targets = getTextCoords('I 💗 U 春春');
+      else if (s === 'name') targets = getTextCoords('圣诞快乐');
+
+      // 粒子分配
+      const minNeeded = Math.floor(activeParticleCount * 0.9);
+      if (targets.length < minNeeded) {
+        const len = targets.length;
+        if (len > 0) {
+          for (let i = len; i < minNeeded; i++) {
+            const base = targets[i % len];
+            targets.push({
+              x: base.x + (Math.random() - 0.5) * 5,
+              y: base.y + (Math.random() - 0.5) * 5,
+              z: base.z,
+              color: base.color
+            });
+          }
+        }
+      }
+
+      const pIndices = Array.from({ length: particles.length }, (_, i) => i);
+      pIndices.sort(() => Math.random() - 0.5);
+
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[pIndices[i]];
+        if (i < activeParticleCount && i < targets.length) {
+          p.tx = targets[i].x;
+          p.ty = targets[i].y;
+          p.tz = targets[i].z;
+          p.color = targets[i].color;
+          p.isMain = true;
+          p.ease = Math.min(0.08, p.ease + 0.02);
+        } else {
+          p.isMain = false;
+          p.tx = (Math.random() - 0.5) * width * 2;
+          p.ty = (Math.random() - 0.5) * height * 2;
+        }
+      }
+    }
+
+    // --- 手势交互 ---
+    function startCamera() {
+      const videoElement = document.getElementById('input_video');
+      const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 0,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+      });
+
+      hands.onResults(onResults);
+
+      const camera = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({ image: videoElement }); },
+        width: 640, height: 480
+      });
+
+      camera.start()
+        .then(() => {
+          loadingDiv.classList.add('hidden');
+          hintText.innerHTML = "🖐️ 张手：驱散风雪 | ✊ 握拳：凝聚浪漫";
+          cameraActive = true;
+        })
+        .catch(err => {
+          useClickMode();
+        });
+    }
+
+    let lastActionTime = 0;
+
+    function onResults(results) {
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
+
+      const lm = results.multiHandLandmarks[0];
+      const d = (p1, p2) => Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+      const palmSize = d(lm[0], lm[9]);
+      const tips = [8, 12, 16, 20];
+      let tipAvg = 0;
+      tips.forEach(i => tipAvg += d(lm[0], lm[i]));
+      tipAvg /= 4;
+
+      const ratio = tipAvg / palmSize;
+      const now = Date.now();
+      if (now - lastActionTime < 500) return;
+
+      if (ratio > 1.3) {
+        if (!isExploded) {
+          isExploded = true;
+          particles.forEach(p => { if (p.isMain) p.explode(); });
+          hintText.innerText = "✨ 粒子已散开... 请握拳聚拢";
+          lastActionTime = now;
+        }
+      } else if (ratio < 1.0) {
+        if (isExploded) {
+          isExploded = false;
+          currentScene = (currentScene + 1) % scenes.length;
+          loadScene(currentScene);
+          hintText.innerText = "❤️ 画面已聚拢... 请张手切换";
+          lastActionTime = now;
+        }
+      }
+    }
+
+    function useClickMode() {
+      loadingDiv.classList.add('hidden');
+      hintText.innerHTML = "点击屏幕切换画面 (手势模式不可用)";
+      cameraActive = false;
+
+      document.addEventListener('click', () => {
+        const now = Date.now();
+        if (now - lastActionTime < 600) return;
+        if (isExploded) return;
+
+        isExploded = true;
+        particles.forEach(p => { if (p.isMain) p.explode(); });
+        lastActionTime = now;
+
+        setTimeout(() => {
+          currentScene = (currentScene + 1) % scenes.length;
+          loadScene(currentScene);
+          isExploded = false;
+        }, 1500);
+      });
+    }
+
+    init();
+
+  </script>
+</body>
+
+</html>
