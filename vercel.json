@@ -2,6 +2,25 @@
   "version": 2,
   "builds": [
     {
+      "src": "**/*",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "^/(.*\\.(?:png|jpg|jpeg|gif|svg|webp|mp3|wav|ogg|css|js))$",
+      "dest": "/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
+{
+  "version": 2,
+  "builds": [
+    {
       "src": "index.html",
       "use": "@vercel/static"
     }
